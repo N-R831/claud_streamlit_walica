@@ -252,53 +252,6 @@ def main():
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         st.markdown('</div>', unsafe_allow_html=True)
  
-    # ── タブ3: デバッグ（問題解決後に削除してOK）──
-    with tab_debug:
-        st.markdown("### 🔧 接続診断")
- 
-        sheet_id = sheet_id_from_url(SHEET_URL)
-        gviz_url   = build_csv_url(sheet_id, WORKSHEET_NAME)
-        export_url = build_export_url(sheet_id)
- 
-        st.code(f"Sheet ID  : {sheet_id}")
-        st.code(f"Sheet Name: {WORKSHEET_NAME}")
-        st.code(f"gviz URL  : {gviz_url}")
-        st.code(f"export URL: {export_url}")
- 
-        if st.button("🔍 今すぐ接続テスト"):
-            with st.spinner("確認中..."):
- 
-                # gviz テスト
-                try:
-                    r = requests.get(gviz_url, timeout=10)
-                    st.write(f"**gviz ステータス:** {r.status_code}")
-                    if r.status_code == 200:
-                        from io import StringIO
-                        df_test = pd.read_csv(StringIO(r.text))
-                        st.success(f"✅ gviz 成功: {len(df_test)} 行, カラム: {list(df_test.columns)}")
-                        st.dataframe(df_test.head(3))
-                    else:
-                        st.error(f"❌ gviz 失敗: {r.text[:200]}")
-                except Exception as e:
-                    st.error(f"❌ gviz 例外: {e}")
- 
-                # export テスト
-                st.divider()
-                try:
-                    r2 = requests.get(export_url, timeout=10)
-                    st.write(f"**export ステータス:** {r2.status_code}")
-                    if r2.status_code == 200:
-                        from io import StringIO
-                        df_test2 = pd.read_csv(StringIO(r2.text))
-                        st.success(f"✅ export 成功: {len(df_test2)} 行, カラム: {list(df_test2.columns)}")
-                        st.dataframe(df_test2.head(3))
-                    else:
-                        st.error(f"❌ export 失敗: {r2.text[:200]}")
-                except Exception as e:
-                    st.error(f"❌ export 例外: {e}")
- 
-        st.divider()
-        st.markdown("**問題が解決したら、このタブは削除してOKです（tabs定義から `tab_debug` を外す）**")
  
  
 if __name__ == "__main__":

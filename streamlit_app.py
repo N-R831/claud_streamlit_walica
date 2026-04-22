@@ -32,6 +32,7 @@ def load_data() -> pd.DataFrame:
         f"/gviz/tq?tqx=out:csv&sheet={WORKSHEET_NAME}"
     )
     try:
+        print(csv_url)
         df = pd.read_csv(csv_url)
         if df.empty or "date" not in df.columns:
             return pd.DataFrame(columns=["date", "member", "kind", "money"])

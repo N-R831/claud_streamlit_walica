@@ -159,7 +159,7 @@ def main():
     st.markdown('<div class="main-title">🍊 割り勘アプリ</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">涼馬 & 花帆 の支出管理</div>', unsafe_allow_html=True)
  
-    tab_input, tab_result, tab_debug = st.tabs(["📝 支出入力", "📊 集計結果", "🔧 デバッグ"])
+    tab_input, tab_result, tab_debug = st.tabs(["📝 支出入力", "📊 集計結果", ])
  
     # ── タブ1: 入力 ─────────────────────────
     with tab_input:

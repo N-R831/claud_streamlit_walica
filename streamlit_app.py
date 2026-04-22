@@ -195,7 +195,7 @@ def main():
 
     # ── タブ1: 入力 ──────────────────────────
     with tab_input:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+        # st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown('<div class="section-label">📅 日付・支払い者</div>', unsafe_allow_html=True)
         col1, col2 = st.columns(2)
         with col1:
@@ -204,7 +204,7 @@ def main():
             member = st.selectbox("支払い者", MEMBERS)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+        # st.markdown('<div class="card">', unsafe_allow_html=True)
         st.markdown('<div class="section-label">💰 支出内容</div>', unsafe_allow_html=True)
         kind  = st.text_input("名目（例：食費、交通費）")
         money = st.number_input("金額（円）", min_value=0, step=100)

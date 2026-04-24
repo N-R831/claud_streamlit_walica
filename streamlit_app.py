@@ -266,7 +266,7 @@ def render_detail_tab(df: pd.DataFrame):
  
             # ── 編集フォーム ──────────────────────
             else:
-                st.markdown("**✏️ 編集中**")
+                st.markdown('<span style="color:#1E1E1E;font-size:1.1rem;margin-left:.6rem"><b>✏️ 編集中</b></span>')
                 e_col1, e_col2 = st.columns(2)
                 with e_col1:
                     e_date   = st.date_input("日付",      value=row["date"].date(),    key=f"e_date_{row_num}")

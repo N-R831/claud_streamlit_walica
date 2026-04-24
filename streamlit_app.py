@@ -221,7 +221,7 @@ def render_detail_tab(df: pd.DataFrame):
  
             # ── 通常表示 ──────────────────────────
             if st.session_state.editing_row != row_num:
-                col_info, col_edit, col_del = st.columns([6, 1.2, 1.2])
+                col_info, col_edit, col_del = st.columns([6, 2, 2])
                 with col_info:
                     st.markdown(
                         f'<span class="{badge_cls}">{member}</span>'

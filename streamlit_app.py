@@ -217,7 +217,7 @@ def render_detail_tab(df: pd.DataFrame):
         badge_cls = "detail-member-badge" if member == MEMBERS[0] else "detail-member-badge-2"
  
         with st.container():
-            st.markdown('<div class="detail-row">', unsafe_allow_html=True)
+            #st.markdown('<div class="detail-row">', unsafe_allow_html=True)
  
             # ── 通常表示 ──────────────────────────
             if st.session_state.editing_row != row_num:

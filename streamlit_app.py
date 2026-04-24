@@ -267,7 +267,8 @@ def render_detail_tab(df: pd.DataFrame):
             # ── 編集フォーム ──────────────────────
             else:
                 st.markdown(
-                    '<span style="color:#1E1E1E;font-size:1.1rem;margin-left:.6rem">✏️ 編集中</span>'
+                    '<span style="color:#1E1E1E;font-size:1.1rem;margin-left:.6rem">✏️ 編集中</span>',
+                    unsafe_allow_html=True
                     )
                 e_col1, e_col2 = st.columns(2)
                 with e_col1:

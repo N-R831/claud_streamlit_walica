@@ -225,7 +225,7 @@ def render_detail_tab(df: pd.DataFrame):
                 with col_info:
                     st.markdown(
                         f'<span class="{badge_cls}">{member}</span>'
-                        f'<span style="color:#1E1E1E;font-size:1.1rem;margin-left:.6rem"><b>{row["kind"]}</b></span>'
+                        f'<span style="color:#1E1E1E;font-size:1.1rem;margin-left:.6rem;width:1rem"><b>{row["kind"]}</b></span>'
                         f'<span style="color:#c0603a;font-size:1.1rem;margin-left:.6rem"><b>¥{int(row["money"]):,}</b></span>'
                         f'<span style="color:#a0826a;font-size:.82rem;margin-left:.6rem">{row["date"].strftime("%Y-%m-%d")}</span>',
                         unsafe_allow_html=True

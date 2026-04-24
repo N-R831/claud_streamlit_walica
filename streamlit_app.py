@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from urllib.parse import quote
 from datetime import date
+from io import StringIO
  
 # ─────────────────────────────────────────
 # 設定
@@ -19,10 +20,6 @@ def sheet_id_from_url(url: str) -> str:
     return url.split("/d/")[1].split("/")[0]
  
 def build_csv_url(sheet_id: str, sheet_name: str) -> str:
-    """
-    gviz/tq 方式（シート名をURLエンコード）。
-    失敗時のフォールバックとして export 方式も用意。
-    """
     encoded = quote(sheet_name)
     return (
         f"https://docs.google.com/spreadsheets/d/{sheet_id}"
@@ -30,7 +27,6 @@ def build_csv_url(sheet_id: str, sheet_name: str) -> str:
     )
  
 def build_export_url(sheet_id: str, gid: str = "0") -> str:
-    """gid（シートのタブID）を使うexport方式"""
     return (
         f"https://docs.google.com/spreadsheets/d/{sheet_id}"
         f"/export?format=csv&gid={gid}"
@@ -38,59 +34,66 @@ def build_export_url(sheet_id: str, gid: str = "0") -> str:
  
 @st.cache_data(ttl=30)
 def load_data() -> tuple[pd.DataFrame, str]:
-    """
-    DataFrameとエラーメッセージのタプルを返す。
-    エラーなし → ("", df)
-    エラーあり → (エラーメッセージ, 空df)
-    """
     empty = pd.DataFrame(columns=["date", "member", "kind", "money"])
     sheet_id = sheet_id_from_url(SHEET_URL)
- 
-    # --- 方式1: gviz/tq（シート名指定）---
-    csv_url = build_csv_url(sheet_id, WORKSHEET_NAME)
+    csv_url  = build_csv_url(sheet_id, WORKSHEET_NAME)
     try:
         resp = requests.get(csv_url, timeout=10)
         resp.raise_for_status()
- 
-        from io import StringIO
         df = pd.read_csv(StringIO(resp.text))
  
-        # カラム名確認
         if "date" not in df.columns:
-            # 方式2: export（gid=0）にフォールバック
             export_url = build_export_url(sheet_id)
             df = pd.read_csv(export_url)
  
         if df.empty or "date" not in df.columns:
-            return empty, f"⚠️ 取得できましたがカラムが見つかりません。実際のカラム: {list(df.columns)}"
+            return empty, f"⚠️ カラムが見つかりません: {list(df.columns)}"
  
         df["date"]  = pd.to_datetime(df["date"], errors="coerce")
         df["money"] = pd.to_numeric(df["money"], errors="coerce").fillna(0)
         df = df.dropna(subset=["date"])
  
-        if df.empty:
-            return empty, "⚠️ データを取得しましたが、dateカラムの値がすべて無効です。"
+        # スプレッドシート上の行番号（ヘッダー=1行目なのでデータは2行目〜）
+        df = df.reset_index(drop=True)
+        df["row_num"] = df.index + 2   # GAS側で使う実際の行番号
  
         return df, ""
  
     except requests.exceptions.HTTPError as e:
-        return empty, f"❌ HTTP エラー: {e}\nURL: {csv_url}"
+        return empty, f"❌ HTTP エラー: {e}"
     except Exception as e:
-        return empty, f"❌ 予期しないエラー: {type(e).__name__}: {e}\nURL: {csv_url}"
+        return empty, f"❌ エラー: {type(e).__name__}: {e}"
  
  
+# ─────────────────────────────────────────
+# GAS 操作
+# ─────────────────────────────────────────
 def post_row(date_str: str, member: str, kind: str, money: int) -> tuple[bool, str]:
-    payload = {"date": date_str, "member": member, "kind": kind, "money": str(money)}
+    payload = {"action": "append", "date": date_str, "member": member, "kind": kind, "money": str(money)}
     try:
         res = requests.post(GAS_URL, json=payload, timeout=15)
         res.raise_for_status()
         return True, ""
-    except requests.exceptions.Timeout:
-        return False, "タイムアウトしました（15秒）"
-    except requests.exceptions.HTTPError as e:
-        return False, f"HTTP エラー: {e}"
     except Exception as e:
-        return False, f"{type(e).__name__}: {e}"
+        return False, str(e)
+ 
+def update_row(row_num: int, date_str: str, member: str, kind: str, money: int) -> tuple[bool, str]:
+    payload = {"action": "update", "row": row_num, "date": date_str, "member": member, "kind": kind, "money": str(money)}
+    try:
+        res = requests.post(GAS_URL, json=payload, timeout=15)
+        res.raise_for_status()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+ 
+def delete_row(row_num: int) -> tuple[bool, str]:
+    payload = {"action": "delete", "row": row_num}
+    try:
+        res = requests.post(GAS_URL, json=payload, timeout=15)
+        res.raise_for_status()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
  
  
 # ─────────────────────────────────────────
@@ -124,6 +127,25 @@ def calc_settlement(df: pd.DataFrame):
  
  
 # ─────────────────────────────────────────
+# 月選択ユーティリティ
+# ─────────────────────────────────────────
+def select_month(df: pd.DataFrame, key_suffix: str) -> pd.DataFrame:
+    df["year_month"] = df["date"].dt.to_period("M")
+    months       = sorted(df["year_month"].unique(), reverse=True)
+    month_labels = [str(m) for m in months]
+ 
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">📆 集計月を選択</div>', unsafe_allow_html=True)
+    selected_label = st.selectbox(
+        "月を選択", month_labels, index=0,
+        label_visibility="collapsed", key=f"month_{key_suffix}"
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+ 
+    return df[df["year_month"] == pd.Period(selected_label, freq="M")].copy()
+ 
+ 
+# ─────────────────────────────────────────
 # スタイル
 # ─────────────────────────────────────────
 def apply_style():
@@ -139,14 +161,149 @@ def apply_style():
     .settlement-box { background:linear-gradient(135deg,#fff3ed,#ffe8d6); border:2px solid #f0a882; border-radius:16px; padding:1.2rem 1.6rem; margin:.6rem 0; font-size:1.1rem; color:#7a3520; font-weight:500; }
     .total-box { background:linear-gradient(135deg,#c0603a,#e07a50); border-radius:16px; padding:1rem 1.4rem; color:white; font-weight:700; font-size:1rem; margin:.4rem 0; }
     .balanced-box { background:linear-gradient(135deg,#d4edda,#c3e6cb); border:2px solid #7abf8a; border-radius:16px; padding:1.2rem 1.6rem; color:#3a7a4a; font-weight:600; font-size:1.05rem; }
-    div.stButton > button { background:linear-gradient(135deg,#c0603a,#e07a50)!important; color:white!important; border:none!important; border-radius:12px!important; font-family:'Zen Maru Gothic',sans-serif!important; font-size:1rem!important; font-weight:700!important; padding:.6rem 2rem!important; width:100%!important; transition:all .2s ease!important; box-shadow:0 4px 12px rgba(192,96,58,.3)!important; }
+    .detail-row { background:rgba(255,255,255,.85); border-radius:14px; padding:1rem 1.2rem; margin:.5rem 0; border:1px solid rgba(192,96,58,.12); box-shadow:0 2px 8px rgba(192,96,58,.06); }
+    .detail-member-badge { display:inline-block; background:linear-gradient(135deg,#c0603a,#e07a50); color:white; border-radius:20px; padding:.15rem .75rem; font-size:.85rem; font-weight:700; margin-right:.5rem; }
+    .detail-member-badge-2 { display:inline-block; background:linear-gradient(135deg,#7a6abf,#9e8fe0); color:white; border-radius:20px; padding:.15rem .75rem; font-size:.85rem; font-weight:700; margin-right:.5rem; }
+    div.stButton > button { background:linear-gradient(135deg,#c0603a,#e07a50)!important; color:white!important; border:none!important; border-radius:12px!important; font-family:'Zen Maru Gothic',sans-serif!important; font-size:1rem!important; font-weight:700!important; padding:.6rem 2rem!important; width:100%!important; transition:all .2s!important; box-shadow:0 4px 12px rgba(192,96,58,.3)!important; }
     div.stButton > button:hover { transform:translateY(-2px)!important; box-shadow:0 6px 20px rgba(192,96,58,.4)!important; }
     .stTabs [data-baseweb="tab-list"] { gap:8px; background:rgba(255,255,255,.5); border-radius:14px; padding:6px; }
     .stTabs [data-baseweb="tab"] { border-radius:10px!important; font-family:'Zen Maru Gothic',sans-serif!important; font-weight:700!important; color:#a0826a!important; }
     .stTabs [aria-selected="true"] { background:linear-gradient(135deg,#c0603a,#e07a50)!important; color:white!important; }
     .stSelectbox label,.stDateInput label,.stNumberInput label,.stTextInput label { font-weight:600!important; color:#7a3520!important; }
+    /* 削除ボタンだけ赤系に上書き */
+    button[data-testid*="delete"], .btn-danger > button {
+        background:linear-gradient(135deg,#c03a3a,#e05050)!important;
+    }
     </style>
     """, unsafe_allow_html=True)
+ 
+ 
+# ─────────────────────────────────────────
+# タブ: 詳細（修正・削除）
+# ─────────────────────────────────────────
+def render_detail_tab(df: pd.DataFrame):
+    if df.empty:
+        st.info("まだ支出データがありません。")
+        return
+ 
+    df_month = select_month(df, key_suffix="detail")
+    if df_month.empty:
+        st.info("選択した月のデータがありません。")
+        return
+ 
+    # メンバーフィルター
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-label">👤 表示するメンバー</div>', unsafe_allow_html=True)
+    filter_member = st.selectbox(
+        "メンバー", ["全員"] + MEMBERS,
+        label_visibility="collapsed", key="detail_filter_member"
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+ 
+    df_view = df_month if filter_member == "全員" else df_month[df_month["member"] == filter_member]
+    df_view = df_view.sort_values("date", ascending=False).reset_index(drop=True)
+ 
+    st.markdown(f'<div class="section-label">📋 明細（{len(df_view)}件）</div>', unsafe_allow_html=True)
+ 
+    # 編集中の行を session_state で管理
+    if "editing_row" not in st.session_state:
+        st.session_state.editing_row = None
+    if "confirm_delete_row" not in st.session_state:
+        st.session_state.confirm_delete_row = None
+ 
+    for idx, row in df_view.iterrows():
+        row_num  = int(row["row_num"])
+        member   = row["member"]
+        badge_cls = "detail-member-badge" if member == MEMBERS[0] else "detail-member-badge-2"
+ 
+        with st.container():
+            st.markdown('<div class="detail-row">', unsafe_allow_html=True)
+ 
+            # ── 通常表示 ──────────────────────────
+            if st.session_state.editing_row != row_num:
+                col_info, col_edit, col_del = st.columns([6, 1.2, 1.2])
+                with col_info:
+                    st.markdown(
+                        f'<span class="{badge_cls}">{member}</span>'
+                        f'<b>{row["kind"]}</b>'
+                        f'<span style="color:#c0603a;font-size:1.1rem;margin-left:.6rem"><b>¥{int(row["money"]):,}</b></span>'
+                        f'<span style="color:#a0826a;font-size:.82rem;margin-left:.6rem">{row["date"].strftime("%Y-%m-%d")}</span>',
+                        unsafe_allow_html=True
+                    )
+                with col_edit:
+                    if st.button("✏️ 修正", key=f"edit_{row_num}"):
+                        st.session_state.editing_row    = row_num
+                        st.session_state.confirm_delete_row = None
+                        st.rerun()
+                with col_del:
+                    if st.session_state.confirm_delete_row == row_num:
+                        pass  # 下の確認UIを表示
+                    else:
+                        if st.button("🗑️ 削除", key=f"del_{row_num}"):
+                            st.session_state.confirm_delete_row = row_num
+                            st.rerun()
+ 
+                # 削除確認
+                if st.session_state.confirm_delete_row == row_num:
+                    st.warning(f"「{row['kind']} / ¥{int(row['money']):,}」を削除してよいですか？")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("✅ はい、削除する", key=f"confirm_del_{row_num}"):
+                            with st.spinner("削除中..."):
+                                ok, err = delete_row(row_num)
+                            if ok:
+                                st.success("削除しました。")
+                                st.session_state.confirm_delete_row = None
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error(f"削除に失敗: {err}")
+                    with c2:
+                        if st.button("❌ キャンセル", key=f"cancel_del_{row_num}"):
+                            st.session_state.confirm_delete_row = None
+                            st.rerun()
+ 
+            # ── 編集フォーム ──────────────────────
+            else:
+                st.markdown("**✏️ 編集中**")
+                e_col1, e_col2 = st.columns(2)
+                with e_col1:
+                    e_date   = st.date_input("日付",      value=row["date"].date(),    key=f"e_date_{row_num}")
+                    e_member = st.selectbox("支払い者",   MEMBERS,
+                                            index=MEMBERS.index(member) if member in MEMBERS else 0,
+                                            key=f"e_member_{row_num}")
+                with e_col2:
+                    e_kind   = st.text_input("名目",      value=row["kind"],            key=f"e_kind_{row_num}")
+                    e_money  = st.number_input("金額（円）", value=int(row["money"]),
+                                               min_value=0, step=100,                  key=f"e_money_{row_num}")
+ 
+                s1, s2 = st.columns(2)
+                with s1:
+                    if st.button("💾 保存する", key=f"save_{row_num}"):
+                        if not e_kind.strip():
+                            st.warning("名目を入力してください。")
+                        elif e_money <= 0:
+                            st.warning("金額を入力してください。")
+                        else:
+                            with st.spinner("更新中..."):
+                                ok, err = update_row(
+                                    row_num,
+                                    e_date.strftime("%Y-%m-%d"),
+                                    e_member, e_kind.strip(), int(e_money)
+                                )
+                            if ok:
+                                st.success("更新しました。")
+                                st.session_state.editing_row = None
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error(f"更新に失敗: {err}")
+                with s2:
+                    if st.button("❌ キャンセル", key=f"cancel_edit_{row_num}"):
+                        st.session_state.editing_row = None
+                        st.rerun()
+ 
+            st.markdown('</div>', unsafe_allow_html=True)
  
  
 # ─────────────────────────────────────────
@@ -159,7 +316,7 @@ def main():
     st.markdown('<div class="main-title">🍊 割り勘アプリ</div>', unsafe_allow_html=True)
     st.markdown('<div class="sub-title">涼馬 & 花帆 の支出管理</div>', unsafe_allow_html=True)
  
-    tab_input, tab_result, = st.tabs(["📝 支出入力", "📊 集計結果", ])
+    tab_input, tab_result, tab_detail = st.tabs(["📝 支出入力", "📊 集計結果", "📋 詳細・編集"])
  
     # ── タブ1: 入力 ─────────────────────────
     with tab_input:
@@ -194,64 +351,55 @@ def main():
     # ── タブ2: 集計 ─────────────────────────
     with tab_result:
         df, err_msg = load_data()
- 
         if err_msg:
             st.error(err_msg)
-            return
- 
-        if df.empty:
+        elif df.empty:
             st.info("まだ支出データがありません。入力タブから登録してください。")
-            return
- 
-        df["year_month"] = df["date"].dt.to_period("M")
-        months       = sorted(df["year_month"].unique(), reverse=True)
-        month_labels = [str(m) for m in months]
- 
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-label">📆 集計月を選択</div>', unsafe_allow_html=True)
-        selected_label = st.selectbox("月を選択", month_labels, index=0, label_visibility="collapsed")
-        st.markdown('</div>', unsafe_allow_html=True)
- 
-        df_month = df[df["year_month"] == pd.Period(selected_label, freq="M")].copy()
-        if df_month.empty:
-            st.info("選択した月のデータがありません。")
-            return
- 
-        totals, grand_total, fair_share, settlements = calc_settlement(df_month)
- 
-        # 支払い合計
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-label">💳 支払い合計</div>', unsafe_allow_html=True)
-        cols = st.columns(len(MEMBERS))
-        for i, m in enumerate(MEMBERS):
-            with cols[i]:
-                st.markdown(f'<div class="total-box"><div style="font-size:.85rem;opacity:.85">{m}</div><div style="font-size:1.6rem">¥{totals[m]:,.0f}</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div style="text-align:center;color:#a0826a;margin-top:.6rem;font-size:.9rem">合計: <b>¥{grand_total:,.0f}</b> ／ 1人あたりの公平負担: <b>¥{fair_share:,.0f}</b></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
- 
-        # 精算結果
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-label">🔄 精算結果</div>', unsafe_allow_html=True)
-        if not settlements:
-            st.markdown('<div class="balanced-box">✅ 精算不要です！ふたりの支払いはバランスが取れています。</div>', unsafe_allow_html=True)
         else:
-            for s in settlements:
-                st.markdown(f'<div class="settlement-box">👤 <b>{s["from"]}</b> → <b>{s["to"]}</b> に <span style="font-size:1.3rem;color:#c0603a;margin-left:.3rem"><b>¥{s["amount"]:,}</b></span> を支払う</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+            df_month = select_month(df, key_suffix="result")
+            if df_month.empty:
+                st.info("選択した月のデータがありません。")
+            else:
+                totals, grand_total, fair_share, settlements = calc_settlement(df_month)
  
-        # 明細
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown('<div class="section-label">📋 明細一覧</div>', unsafe_allow_html=True)
-        display_df = (
-            df_month[["date","member","kind","money"]].copy()
-            .assign(date=lambda d: d["date"].dt.strftime("%Y-%m-%d"))
-            .rename(columns={"date":"日付","member":"支払い者","kind":"名目","money":"金額（円）"})
-            .sort_values("日付", ascending=False)
-            .reset_index(drop=True)
-        )
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-label">💳 支払い合計</div>', unsafe_allow_html=True)
+                cols = st.columns(len(MEMBERS))
+                for i, m in enumerate(MEMBERS):
+                    with cols[i]:
+                        st.markdown(
+                            f'<div class="total-box">'
+                            f'<div style="font-size:.85rem;opacity:.85">{m}</div>'
+                            f'<div style="font-size:1.6rem">¥{totals[m]:,.0f}</div>'
+                            f'</div>', unsafe_allow_html=True
+                        )
+                st.markdown(
+                    f'<div style="text-align:center;color:#a0826a;margin-top:.6rem;font-size:.9rem">'
+                    f'合計: <b>¥{grand_total:,.0f}</b> ／ 1人あたりの公平負担: <b>¥{fair_share:,.0f}</b>'
+                    f'</div>', unsafe_allow_html=True
+                )
+                st.markdown('</div>', unsafe_allow_html=True)
  
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                st.markdown('<div class="section-label">🔄 精算結果</div>', unsafe_allow_html=True)
+                if not settlements:
+                    st.markdown('<div class="balanced-box">✅ 精算不要です！ふたりの支払いはバランスが取れています。</div>', unsafe_allow_html=True)
+                else:
+                    for s in settlements:
+                        st.markdown(
+                            f'<div class="settlement-box">👤 <b>{s["from"]}</b> → <b>{s["to"]}</b> に '
+                            f'<span style="font-size:1.3rem;color:#c0603a;margin-left:.3rem"><b>¥{s["amount"]:,}</b></span> を支払う</div>',
+                            unsafe_allow_html=True
+                        )
+                st.markdown('</div>', unsafe_allow_html=True)
+ 
+    # ── タブ3: 詳細・編集 ────────────────────
+    with tab_detail:
+        df, err_msg = load_data()
+        if err_msg:
+            st.error(err_msg)
+        else:
+            render_detail_tab(df)
  
  
 if __name__ == "__main__":
